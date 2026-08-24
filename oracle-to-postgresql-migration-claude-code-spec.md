@@ -1,0 +1,2216 @@
+# Oracle to PostgreSQL Migration Utility — Claude Code Build Specification
+
+## Objective
+
+Build a production-quality **C#/.NET command-line application for Windows** that connects to an Oracle database, inspects a specified schema, produces an editable migration manifest, generates PostgreSQL-compatible DDL files, exports table data to CSV, converts Oracle-specific values/types to appropriate PostgreSQL equivalents, and provides validation/reporting capabilities.
+
+The application should be designed as a reusable migration engine rather than a one-off script.
+
+Primary target:
+
+- Source: Oracle Database
+- Target: PostgreSQL
+- Runtime OS: Windows
+- Language: C#
+- Framework: .NET 9 or later
+- Initial interface: CLI
+- Architecture should allow a GUI to be added later without changing migration/business logic.
+
+---
+
+# 1. Core Workflow
+
+The intended workflow is:
+
+```text
+Oracle Database
+      |
+      v
+[1. Scan Schema]
+      |
+      +--> manifest.csv
+      +--> metadata.json
+      +--> report.txt
+      |
+      v
+[2. User optionally edits manifest.csv]
+      |
+      v
+[3. Generate PostgreSQL DDL]
+      |
+      +--> ddl/tables/*.sql
+      +--> ddl/primary-keys/*.sql
+      +--> ddl/foreign-keys/*.sql
+      +--> ddl/indexes/*.sql
+      +--> ddl/sequences/*.sql
+      |
+      v
+[4. Export Data]
+      |
+      +--> data/<table>.csv
+      |
+      v
+[5. Optionally generate/load PostgreSQL import scripts]
+      |
+      v
+[6. Validate migration]
+```
+
+The `manifest.csv` is intended to be user-editable.
+
+The `metadata.json` should contain the detailed Oracle schema metadata captured during the scan so that later operations do not need to repeatedly interrogate Oracle.
+
+---
+
+# 2. Windows Runtime Requirements
+
+The application will normally run from a Windows machine that can reach the Oracle database.
+
+It must support:
+
+- Local Windows paths:
+
+```text
+C:\data_export
+D:\migration\output
+```
+
+- UNC/network paths:
+
+```text
+\\server\folder\path
+\\nas01\migrations\oracle
+```
+
+If users provide forward-slash UNC-like paths such as:
+
+```text
+//server/folder/path
+```
+
+the application should normalize them appropriately for Windows where possible.
+
+The application must:
+
+- Validate the destination directory.
+- Create missing directories when permitted.
+- Detect permission/access failures and report clear errors.
+- Avoid assuming output is on a local disk.
+- Work with network shares using the permissions of the process/user running the CLI.
+- Support long-running exports to network locations.
+- Write files incrementally/stream them rather than buffering large data sets in memory.
+- Use atomic or temporary-file strategies where practical so incomplete files can be distinguished from completed files.
+
+Example:
+
+```text
+CUSTOMER.csv.partial
+```
+
+then rename to:
+
+```text
+CUSTOMER.csv
+```
+
+when export completes successfully.
+
+---
+
+# 3. Oracle Connection Configuration
+
+The application must support Oracle connection parameters supplied directly through CLI arguments or read from custom-named Windows environment variables.
+
+Required connection components:
+
+- Username
+- Password
+- Host / URL
+- Port
+- SID or Service Name
+- Optional schema
+
+The application must support SID-based and service-name-based Oracle connections.
+
+Examples:
+
+```text
+Host: oracle01.internal.local
+Port: 1521
+SID: ORCL
+```
+
+or:
+
+```text
+Host: oracle01.internal.local
+Port: 1521
+Service Name: PRODDB
+```
+
+Do not require the Oracle connection values to use predefined environment variable names.
+
+Users must be able to specify which environment variable contains each value.
+
+Example CLI:
+
+```powershell
+orapg scan `
+    --oracle-user-env ORACLE_MIGRATION_USER `
+    --oracle-password-env ORACLE_MIGRATION_PASSWORD `
+    --oracle-host-env ORACLE_MIGRATION_HOST `
+    --oracle-port-env ORACLE_MIGRATION_PORT `
+    --oracle-sid-env ORACLE_MIGRATION_SID `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+Where Windows has:
+
+```powershell
+$env:ORACLE_MIGRATION_USER="migration_user"
+$env:ORACLE_MIGRATION_PASSWORD="secret"
+$env:ORACLE_MIGRATION_HOST="oracle.internal"
+$env:ORACLE_MIGRATION_PORT="1521"
+$env:ORACLE_MIGRATION_SID="ORCL"
+```
+
+The CLI should also allow direct values:
+
+```powershell
+orapg scan `
+    --oracle-user migration_user `
+    --oracle-password secret `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-sid ORCL `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+Service-name example:
+
+```powershell
+orapg scan `
+    --oracle-user migration_user `
+    --oracle-password secret `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-service-name PRODDB `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+Direct CLI values should take precedence over environment variable references.
+
+The password must never be written to:
+
+- Logs
+- Console diagnostic output
+- metadata.json
+- manifest.csv
+- reports
+- exception messages generated by the application
+
+Prefer environment variables for credentials.
+
+---
+
+# 4. Schema Selection
+
+The application must understand the distinction between:
+
+- Oracle login/user
+- Oracle schema being inspected/exported
+
+The schema must be independently configurable.
+
+Example:
+
+```powershell
+orapg scan `
+    --oracle-user MIGRATION_READER `
+    --schema LEGACY_APP
+```
+
+The connected Oracle account may have privileges to inspect another schema.
+
+If `--schema` is supplied, metadata queries must be scoped to that schema.
+
+Normalize unquoted Oracle schema names appropriately, generally uppercase.
+
+For example:
+
+```text
+legacy_app
+```
+
+should normally resolve to:
+
+```text
+LEGACY_APP
+```
+
+unless quoted/case-sensitive identifiers explicitly require otherwise.
+
+If no schema is provided:
+
+1. Default to the connected Oracle username's schema.
+2. Print which schema was selected.
+3. Record the selected schema in metadata.json and report.txt.
+
+The application should validate that the requested schema exists and is accessible.
+
+---
+
+# 5. Recommended Technology Stack
+
+Use:
+
+```text
+.NET 9+
+C#
+Oracle.ManagedDataAccess.Core
+Npgsql
+CsvHelper
+System.CommandLine
+Microsoft.Extensions.Hosting
+Microsoft.Extensions.DependencyInjection
+Microsoft.Extensions.Configuration
+Microsoft.Extensions.Logging
+```
+
+Serilog may be used for structured file logging if useful.
+
+Avoid introducing unnecessary dependencies.
+
+---
+
+# 6. Proposed Solution Structure
+
+Create a solution similar to:
+
+```text
+OraclePgMigrator.sln
+
+src/
+├── OraclePgMigrator.Cli/
+│   ├── Commands/
+│   ├── Options/
+│   └── Program.cs
+│
+├── OraclePgMigrator.Core/
+│   ├── Models/
+│   ├── Mapping/
+│   ├── Conversion/
+│   ├── Migration/
+│   ├── Validation/
+│   └── Abstractions/
+│
+├── OraclePgMigrator.Oracle/
+│   ├── Connection/
+│   ├── SchemaReader/
+│   ├── DataReader/
+│   └── Metadata/
+│
+├── OraclePgMigrator.Postgres/
+│   ├── Ddl/
+│   ├── Loader/
+│   └── Validation/
+│
+└── OraclePgMigrator.Infrastructure/
+    ├── Csv/
+    ├── Json/
+    ├── FileSystem/
+    ├── Logging/
+    └── State/
+
+tests/
+├── OraclePgMigrator.Core.Tests/
+├── OraclePgMigrator.Oracle.Tests/
+├── OraclePgMigrator.Postgres.Tests/
+└── OraclePgMigrator.IntegrationTests/
+```
+
+Keep CLI concerns separate from migration logic.
+
+Do not build all functionality directly into `Program.cs`.
+
+---
+
+# 7. Commands
+
+The CLI should ultimately support commands similar to the following.
+
+## Scan
+
+```powershell
+orapg scan `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-sid ORCL `
+    --oracle-user migration_user `
+    --oracle-password-env ORACLE_PASSWORD `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+Produces:
+
+```text
+C:\data_export\
+├── manifest.csv
+├── metadata.json
+└── report.txt
+```
+
+---
+
+## Generate DDL
+
+```powershell
+orapg ddl `
+    --manifest C:\data_export\manifest.csv `
+    --metadata C:\data_export\metadata.json `
+    --output C:\data_export\ddl
+```
+
+Produces PostgreSQL SQL files.
+
+---
+
+## Export Data
+
+```powershell
+orapg export `
+    --manifest C:\data_export\manifest.csv `
+    --metadata C:\data_export\metadata.json `
+    --output C:\data_export\data `
+    --parallel 4
+```
+
+Oracle credentials may also be required because data is being read from Oracle.
+
+---
+
+## Validate
+
+```powershell
+orapg validate `
+    --manifest C:\data_export\manifest.csv `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-sid ORCL `
+    --oracle-user migration_user `
+    --oracle-password-env ORACLE_PASSWORD `
+    --postgres-connection-env TARGET_POSTGRES
+```
+
+---
+
+## Full Migration
+
+Eventually support:
+
+```powershell
+orapg migrate `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-sid ORCL `
+    --oracle-user migration_user `
+    --oracle-password-env ORACLE_PASSWORD `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+This convenience command may orchestrate:
+
+```text
+scan
+ddl
+export
+optional load
+validate
+```
+
+Keep each individual command independently usable.
+
+---
+
+# 8. Migration Manifest
+
+The initial scan must produce an editable CSV.
+
+Suggested format:
+
+```csv
+Include,SourceSchema,SourceTable,RowCount,GenerateDDL,ExportData,TargetSchema,TargetTable
+true,LEGACY,CUSTOMER,12342,true,true,public,customer
+true,LEGACY,ORDERS,892314,true,true,public,orders
+false,LEGACY,AUDIT_ARCHIVE,82444512,false,false,public,audit_archive
+```
+
+At minimum include:
+
+- Include
+- SourceSchema
+- SourceTable
+- RowCount
+- GenerateDDL
+- ExportData
+- TargetSchema
+- TargetTable
+
+The user should be able to:
+
+- Remove rows
+- Set `Include=false`
+- Disable DDL generation
+- Disable data export
+- Rename target schema
+- Rename target table
+
+Commands reading the manifest must tolerate reordered rows.
+
+Validate required columns and provide clear errors for malformed manifests.
+
+---
+
+# 9. Metadata Snapshot
+
+The scan must also produce a detailed `metadata.json`.
+
+Example conceptual structure:
+
+```json
+{
+  "source": {
+    "database": "ORCL",
+    "schema": "LEGACY"
+  },
+  "scannedAtUtc": "2026-08-25T00:00:00Z",
+  "tables": [
+    {
+      "name": "CUSTOMER",
+      "rowCount": 12842,
+      "columns": [
+        {
+          "name": "CUSTOMER_ID",
+          "oracleType": "NUMBER",
+          "length": null,
+          "precision": 19,
+          "scale": 0,
+          "nullable": false,
+          "defaultValue": null
+        }
+      ],
+      "primaryKey": {
+        "name": "PK_CUSTOMER",
+        "columns": [
+          "CUSTOMER_ID"
+        ]
+      },
+      "foreignKeys": [],
+      "indexes": [],
+      "constraints": [],
+      "triggers": [],
+      "comments": []
+    }
+  ]
+}
+```
+
+Capture enough information to generate PostgreSQL DDL without reconnecting to Oracle.
+
+Never store connection passwords.
+
+Prefer storing connection metadata only where useful, for example:
+
+```text
+host
+port
+SID/service name
+schema
+```
+
+Consider masking or omitting host information if it does not add value.
+
+---
+
+# 10. Schema Scan
+
+The scan command must enumerate all tables in the selected schema and obtain row counts.
+
+The key requested output is:
+
+```text
+Table name + row count
+```
+
+Do not rely solely on Oracle optimizer statistics for an authoritative row count unless explicitly requested.
+
+Provide a strategy such as:
+
+```text
+--row-count-mode exact
+--row-count-mode statistics
+```
+
+Where:
+
+- `exact` performs `COUNT(*)`
+- `statistics` uses Oracle metadata/statistics and is faster but potentially stale
+
+Default can be `exact` initially unless performance becomes problematic.
+
+If table counting runs in parallel, concurrency must be limited.
+
+The scanner should also inspect:
+
+- Tables
+- Columns
+- Data types
+- Length
+- Precision
+- Scale
+- Nullable
+- Defaults
+- Primary keys
+- Foreign keys
+- Unique constraints
+- Check constraints
+- Indexes
+- Sequences
+- Identity columns
+- Triggers
+- Views, at least for reporting
+- Synonyms, at least for reporting
+- Comments if available
+- Partitioning information, at least for warnings/reporting
+
+---
+
+# 11. Schema Analysis Report
+
+Generate `report.txt` or equivalent human-readable report.
+
+Example:
+
+```text
+Oracle to PostgreSQL Migration Analysis
+
+Source schema: LEGACY
+
+Tables:                287
+Rows:                   48,291,392
+Columns:                3,941
+Primary keys:           271
+Foreign keys:           384
+Indexes:                642
+Sequences:              19
+Views:                  42
+
+Tables without primary keys:
+    TEMP_IMPORT
+    LEGACY_EVENTS
+
+Unsupported or special Oracle types:
+    XMLTYPE             4 columns
+    SDO_GEOMETRY        2 columns
+
+Potential migration issues:
+    NUMBER columns without explicit precision/scale: 43
+    PostgreSQL reserved identifier conflicts: 7
+    Oracle quoted identifiers: 2
+    Function-based indexes: 5
+```
+
+The report should highlight migration risks rather than silently guessing.
+
+---
+
+# 12. Oracle to PostgreSQL Data Type Mapping
+
+Data type mapping must be implemented as a dedicated subsystem.
+
+Do not scatter type conversion logic across the codebase.
+
+Suggested abstractions:
+
+```csharp
+public sealed record OracleColumn(
+    string Name,
+    string DataType,
+    int? Length,
+    int? Precision,
+    int? Scale,
+    bool Nullable);
+
+public sealed record PostgreSqlColumn(
+    string Name,
+    string DataType,
+    bool Nullable);
+
+public interface IDataTypeMapper
+{
+    PostgreSqlColumn Map(OracleColumn column);
+}
+```
+
+A possible initial mapper:
+
+```csharp
+public sealed class OracleToPostgresTypeMapper : IDataTypeMapper
+{
+    public PostgreSqlColumn Map(OracleColumn column)
+    {
+        var type = column.DataType.ToUpperInvariant() switch
+        {
+            "VARCHAR2" => $"varchar({column.Length})",
+            "NVARCHAR2" => $"varchar({column.Length})",
+            "CHAR" => $"char({column.Length})",
+            "NCHAR" => $"char({column.Length})",
+
+            "CLOB" => "text",
+            "NCLOB" => "text",
+
+            "BLOB" => "bytea",
+            "RAW" => "bytea",
+
+            "DATE" => "timestamp",
+            "TIMESTAMP" => "timestamp",
+            "TIMESTAMP WITH TIME ZONE" => "timestamp with time zone",
+
+            "FLOAT" => "double precision",
+            "BINARY_FLOAT" => "real",
+            "BINARY_DOUBLE" => "double precision",
+
+            "NUMBER" => MapNumber(column),
+
+            _ => throw new UnsupportedOracleTypeException(column.DataType)
+        };
+
+        return new PostgreSqlColumn(
+            column.Name,
+            type,
+            column.Nullable);
+    }
+
+    private static string MapNumber(OracleColumn column)
+    {
+        if (column.Precision is null)
+            return "numeric";
+
+        if (column.Scale is null or 0)
+        {
+            return column.Precision switch
+            {
+                <= 4 => "smallint",
+                <= 9 => "integer",
+                <= 18 => "bigint",
+                _ => $"numeric({column.Precision})"
+            };
+        }
+
+        return $"numeric({column.Precision},{column.Scale})";
+    }
+}
+```
+
+This is a starting point only.
+
+Mapping rules must be thoroughly tested.
+
+---
+
+# 13. Important Type Mapping Cases
+
+Handle at least:
+
+```text
+Oracle                          PostgreSQL
+-----------------------------------------------------------
+VARCHAR2                        varchar / text
+NVARCHAR2                       varchar
+CHAR                            char
+NCHAR                           char
+CLOB                            text
+NCLOB                           text
+BLOB                            bytea
+RAW                             bytea
+LONG                            text
+LONG RAW                        bytea
+NUMBER                          smallint/integer/bigint/numeric
+FLOAT                           double precision/numeric
+BINARY_FLOAT                    real
+BINARY_DOUBLE                   double precision
+DATE                            timestamp without time zone
+TIMESTAMP                       timestamp without time zone
+TIMESTAMP WITH TIME ZONE        timestamp with time zone
+TIMESTAMP WITH LOCAL TIME ZONE  requires explicit policy
+INTERVAL YEAR TO MONTH          interval
+INTERVAL DAY TO SECOND          interval
+XMLTYPE                         xml or text
+ROWID                           text, where export is explicitly desired
+UROWID                          text
+```
+
+Also detect/report:
+
+- SDO_GEOMETRY
+- Oracle object types
+- Nested tables
+- VARRAY
+- user-defined types
+
+Do not silently generate incorrect mappings for unsupported types.
+
+Generate warnings/errors and allow configured overrides.
+
+---
+
+# 14. Configurable Type Overrides
+
+Allow users to supply custom type mappings.
+
+Example configuration:
+
+```json
+{
+  "typeMappings": {
+    "XMLTYPE": "xml",
+    "SDO_GEOMETRY": "geometry",
+    "MY_CUSTOM_TYPE": "jsonb"
+  }
+}
+```
+
+Potential CLI:
+
+```powershell
+orapg ddl `
+    --manifest manifest.csv `
+    --metadata metadata.json `
+    --type-map type-map.json
+```
+
+Custom mapping must override built-in mapping rules.
+
+---
+
+# 15. NUMBER Handling
+
+Oracle `NUMBER` requires special attention.
+
+Cases include:
+
+```text
+NUMBER
+NUMBER(5)
+NUMBER(10)
+NUMBER(19)
+NUMBER(10,2)
+NUMBER(*,0)
+NUMBER(38,10)
+```
+
+Do not assume every `NUMBER` should become PostgreSQL `numeric`.
+
+Preferred policy:
+
+- Small integer precision -> `smallint`
+- Medium integer precision -> `integer`
+- Large integer precision -> `bigint`
+- Larger/exact numbers -> `numeric`
+- Scaled values -> `numeric(p,s)`
+- Unknown precision -> `numeric`
+
+Make mapping behavior configurable if useful.
+
+---
+
+# 16. Identifier Handling
+
+Oracle commonly stores unquoted identifiers uppercase.
+
+PostgreSQL normally works most conveniently with lowercase unquoted identifiers.
+
+Provide an identifier policy:
+
+```text
+--identifier-case lower
+--identifier-case preserve
+```
+
+Default:
+
+```text
+lower
+```
+
+Example:
+
+```text
+CUSTOMER_ADDRESS
+```
+
+becomes:
+
+```text
+customer_address
+```
+
+Avoid creating PostgreSQL schemas requiring permanent quoted uppercase identifiers unless explicitly requested.
+
+Detect:
+
+- PostgreSQL reserved words
+- Invalid PostgreSQL identifiers
+- Duplicate identifiers after normalization
+- Identifiers exceeding PostgreSQL length limits
+- Oracle quoted identifiers
+
+Do not silently create collisions.
+
+---
+
+# 17. PostgreSQL DDL Generation
+
+Generate one SQL file per table.
+
+Example:
+
+```text
+ddl/
+└── tables/
+    ├── customer.sql
+    ├── orders.sql
+    └── products.sql
+```
+
+A table file may look like:
+
+```sql
+CREATE TABLE public.customer
+(
+    customer_id bigint NOT NULL,
+    name varchar(100),
+    created_at timestamp without time zone
+);
+```
+
+DDL output should be deterministic.
+
+Running generation repeatedly with the same input should produce equivalent files.
+
+---
+
+# 18. Primary Keys
+
+Generate primary key DDL.
+
+Primary keys may be:
+
+- Included in the table SQL
+- Or generated in a separate stage
+
+Prefer separate logical sections/files if this improves migration ordering.
+
+For example:
+
+```text
+ddl/
+├── tables/
+├── primary-keys/
+├── foreign-keys/
+├── indexes/
+└── sequences/
+```
+
+---
+
+# 19. Foreign Keys
+
+Foreign keys should generally be applied after data loading.
+
+Recommended migration order:
+
+```text
+CREATE SCHEMAS
+CREATE TABLES
+CREATE PRIMARY KEYS where appropriate
+LOAD DATA
+CREATE FOREIGN KEYS
+CREATE NON-PRIMARY INDEXES
+ANALYZE
+VALIDATE
+```
+
+Generate FK SQL independently.
+
+---
+
+# 20. Indexes
+
+Inspect Oracle index metadata and generate PostgreSQL equivalents where safe.
+
+Support normal indexes.
+
+Detect/report special Oracle indexes such as:
+
+- Bitmap indexes
+- Function-based indexes
+- Reverse indexes
+- Domain indexes
+- Partitioned indexes
+
+Do not pretend unsupported index types translate directly.
+
+---
+
+# 21. Sequences
+
+Inspect Oracle sequences.
+
+Preserve meaningful properties where possible:
+
+- Current/next useful value
+- Increment
+- Minimum
+- Maximum
+- Cycle
+- Cache where meaningful
+
+Example output:
+
+```sql
+CREATE SEQUENCE public.customer_seq
+    START WITH 82742
+    INCREMENT BY 1;
+```
+
+Ensure a migrated sequence does not start behind already-exported table data.
+
+---
+
+# 22. Identity and Sequence/Trigger Detection
+
+Oracle schemas often use:
+
+```text
+SEQUENCE
++
+BEFORE INSERT TRIGGER
+```
+
+to populate primary keys.
+
+Optionally detect common patterns such as:
+
+```sql
+:new.customer_id := customer_seq.nextval;
+```
+
+Provide a future/configurable option to convert them into PostgreSQL identity columns:
+
+```sql
+customer_id bigint GENERATED BY DEFAULT AS IDENTITY
+```
+
+Do not automatically perform semantic trigger conversion unless the rule is clearly safe.
+
+Report trigger logic that requires manual migration.
+
+---
+
+# 23. Data Export
+
+For every manifest row where:
+
+```text
+Include=true
+ExportData=true
+```
+
+export the Oracle table's data to:
+
+```text
+data/<target-or-source-table-name>.csv
+```
+
+Example:
+
+```text
+data/
+├── customer.csv
+├── orders.csv
+└── products.csv
+```
+
+File names must be sanitized for Windows.
+
+Handle collisions deterministically.
+
+---
+
+# 24. Streaming
+
+Data exports must be streamed.
+
+Do not load an entire table or large result set into memory.
+
+Conceptual approach:
+
+```csharp
+await using var reader =
+    await command.ExecuteReaderAsync(
+        CommandBehavior.SequentialAccess);
+
+while (await reader.ReadAsync())
+{
+    // Convert and stream one row to CSV.
+}
+```
+
+Memory usage should remain bounded for tables containing hundreds of millions of rows.
+
+LOBs also require streaming-aware handling.
+
+---
+
+# 25. Data Value Conversion
+
+Do not simply call `.ToString()` for every Oracle value.
+
+Create a dedicated conversion pipeline.
+
+Example abstraction:
+
+```csharp
+public interface IOracleValueConverter
+{
+    object? Convert(
+        OracleColumn column,
+        object? value);
+}
+```
+
+Explicitly handle:
+
+- NULL
+- DATE
+- TIMESTAMP
+- TIMESTAMP WITH TIME ZONE
+- TIMESTAMP WITH LOCAL TIME ZONE
+- NUMBER
+- FLOAT
+- BINARY_FLOAT
+- BINARY_DOUBLE
+- RAW
+- BLOB
+- CLOB
+- NCLOB
+- INTERVAL
+- XMLTYPE
+- BOOLEAN if supported by Oracle version/source
+- Special Oracle provider types
+
+Use invariant culture for numeric/date serialization.
+
+Do not allow the Windows locale to change exported values.
+
+---
+
+# 26. Date and Time Policy
+
+Date/time handling must be deterministic.
+
+Prefer ISO-compatible representations.
+
+Example:
+
+```text
+2026-08-25 13:45:01
+2026-08-25T13:45:01.123456
+2026-08-25T13:45:01.123456+09:30
+```
+
+Do not use Windows regional date formats.
+
+Document decisions around:
+
+```text
+Oracle DATE
+Oracle TIMESTAMP
+Oracle TIMESTAMP WITH TIME ZONE
+Oracle TIMESTAMP WITH LOCAL TIME ZONE
+```
+
+especially timezone semantics.
+
+---
+
+# 27. CSV Format
+
+Use a consistent CSV dialect.
+
+Requirements:
+
+- UTF-8
+- Header row
+- RFC-compatible quoting
+- Embedded commas handled
+- Embedded quotes handled
+- Embedded CR/LF handled
+- NULL must be distinguishable from empty string
+
+A recommended NULL token is:
+
+```text
+\N
+```
+
+Ensure the writer distinguishes:
+
+```text
+NULL
+```
+
+from:
+
+```text
+""
+```
+
+when semantically necessary.
+
+---
+
+# 28. PostgreSQL COPY Compatibility
+
+Prefer generating CSV that can be loaded efficiently through PostgreSQL `COPY` or `\copy`.
+
+Generate load scripts where useful.
+
+Example:
+
+```sql
+\copy public.customer
+FROM './data/customer.csv'
+WITH
+(
+    FORMAT csv,
+    HEADER true,
+    NULL '\N'
+);
+```
+
+Potential output:
+
+```text
+load/
+├── customer.sql
+├── orders.sql
+└── products.sql
+```
+
+Also consider generating a master load script in correct dependency order.
+
+---
+
+# 29. BLOB Handling
+
+Choose and document a safe strategy.
+
+Possible initial strategy:
+
+- Export BLOB values as PostgreSQL-compatible hex bytea text such as `\x...`
+- Or optionally export BLOBs to individual files and reference them
+
+The initial implementation should prioritize correctness over compactness.
+
+Large BLOBs must not be fully buffered when avoidable.
+
+---
+
+# 30. CLOB / NCLOB Handling
+
+CLOB and NCLOB should generally become PostgreSQL `text`.
+
+Ensure:
+
+- Unicode is preserved
+- Newlines are preserved
+- Quotes are escaped correctly by CSV
+- Very large values can be streamed
+
+---
+
+# 31. Parallel Export
+
+Support bounded parallelism by table.
+
+Example:
+
+```powershell
+orapg export `
+    --parallel 4
+```
+
+Meaning up to four tables export concurrently.
+
+Do not use uncontrolled concurrency.
+
+Each concurrent export may require its own Oracle connection.
+
+Connection usage must be bounded.
+
+---
+
+# 32. Resume Capability
+
+Long-running migrations need resume support.
+
+Track state in something similar to:
+
+```text
+migration-state.json
+```
+
+Example:
+
+```json
+{
+  "tables": {
+    "CUSTOMER": {
+      "status": "complete"
+    },
+    "ORDERS": {
+      "status": "complete"
+    },
+    "AUDIT_LOG": {
+      "status": "failed"
+    },
+    "PAYMENT": {
+      "status": "pending"
+    }
+  }
+}
+```
+
+Support:
+
+```powershell
+orapg export --resume
+```
+
+At minimum resume at table granularity.
+
+Future versions may support chunk-level resume for huge tables.
+
+Do not treat a `.partial` data file as complete.
+
+---
+
+# 33. Progress Reporting
+
+Provide useful CLI progress.
+
+Example:
+
+```text
+[12/143] CUSTOMER
+Rows: 1,842,201
+Elapsed: 00:01:42
+Rate: 18,061 rows/sec
+Output: \\server\migration\data\customer.csv
+```
+
+For parallel operations, keep output readable.
+
+Avoid printing sensitive values.
+
+---
+
+# 34. Logging
+
+Support:
+
+```text
+--log-level
+--log-file
+```
+
+Useful levels:
+
+```text
+Trace
+Debug
+Information
+Warning
+Error
+Critical
+```
+
+Default console output should be concise.
+
+Detailed diagnostics can go to file.
+
+Never log passwords or complete connection strings containing passwords.
+
+---
+
+# 35. Dry Run / Analysis Mode
+
+Provide:
+
+```powershell
+orapg migrate --dry-run
+```
+
+or equivalent.
+
+It should analyze what would happen without writing migration data or modifying PostgreSQL.
+
+Example output:
+
+```text
+Would migrate:
+    143 tables
+    82,943,183 rows
+
+Estimated source data:
+    37 GB
+
+Unsupported types:
+    3 columns
+
+Warnings:
+    12 tables without primary keys
+    5 identifier collisions
+    2 unsupported indexes
+```
+
+---
+
+# 36. Validation
+
+Provide at least row-count validation.
+
+Example:
+
+```text
+Table               Oracle        PostgreSQL        Result
+----------------------------------------------------------
+customer             12,842        12,842            OK
+orders              981,442       981,442            OK
+payment              43,891        43,890            FAIL
+```
+
+Potential command:
+
+```powershell
+orapg validate
+```
+
+---
+
+# 37. Stronger Data Validation
+
+Add an optional stronger validation mode.
+
+Potential strategy:
+
+- Deterministically order rows by primary key
+- Hash normalized row values
+- Compare chunk hashes
+
+Example:
+
+```text
+CUSTOMER
+
+Oracle rows:       12,842
+PostgreSQL rows:   12,842
+
+Chunk 1: MATCH
+Chunk 2: MATCH
+Chunk 3: MATCH
+```
+
+Do not rely only on whole-table hashes for massive tables if chunked verification is more practical.
+
+---
+
+# 38. Table Ordering
+
+Generate a dependency graph from foreign keys.
+
+Provide migration ordering that avoids obvious FK dependency issues.
+
+Detect cycles.
+
+For cyclic dependencies:
+
+- Create tables first
+- Load data
+- Add FKs afterwards
+
+This is one reason foreign keys should be generated separately.
+
+---
+
+# 39. Views
+
+Views should at least be discovered and reported.
+
+A future command may generate view migration candidates.
+
+Do not blindly assume Oracle SQL view definitions are PostgreSQL-compatible.
+
+Report views requiring translation.
+
+---
+
+# 40. Stored Procedures, Functions, Packages and Triggers
+
+These should be discovered and reported even if not initially converted.
+
+Report counts for:
+
+- Procedures
+- Functions
+- Packages
+- Package bodies
+- Triggers
+
+These contain PL/SQL and generally require semantic migration.
+
+Do not claim they have been migrated merely because tables/data were migrated.
+
+---
+
+# 41. Constraints
+
+Support:
+
+- NOT NULL
+- PRIMARY KEY
+- UNIQUE
+- FOREIGN KEY
+- Basic CHECK constraints where syntax is compatible
+
+Detect Oracle-specific expressions and warn.
+
+---
+
+# 42. Defaults
+
+Inspect Oracle column defaults.
+
+Translate common compatible values.
+
+Examples may include:
+
+```text
+SYSDATE
+SYSTIMESTAMP
+sequence.NEXTVAL
+literal values
+```
+
+Some Oracle defaults require PostgreSQL translation.
+
+Use explicit translators.
+
+Warn when no safe translation exists.
+
+---
+
+# 43. Reserved Words
+
+Detect target PostgreSQL reserved words.
+
+Examples:
+
+```text
+USER
+ORDER
+GROUP
+POSITION
+CURRENT_USER
+```
+
+Provide an explicit policy:
+
+- Normalize/rename
+- Quote
+- Warn/error
+
+Prefer warning plus deterministic mapping rather than silent behavior.
+
+---
+
+# 44. Output Layout
+
+Recommended output layout:
+
+```text
+migration/
+├── manifest.csv
+├── metadata.json
+├── report.txt
+├── migration-state.json
+│
+├── ddl/
+│   ├── schemas/
+│   ├── tables/
+│   ├── primary-keys/
+│   ├── sequences/
+│   ├── foreign-keys/
+│   └── indexes/
+│
+├── data/
+│   ├── customer.csv
+│   ├── orders.csv
+│   └── products.csv
+│
+├── load/
+│   ├── customer.sql
+│   ├── orders.sql
+│   ├── products.sql
+│   └── load-all.sql
+│
+└── logs/
+    └── migration.log
+```
+
+---
+
+# 45. Network Path Considerations
+
+Because output may be written to:
+
+```text
+\\server\folder\path
+```
+
+the application must:
+
+- Use normal .NET file APIs compatible with UNC paths.
+- Avoid assumptions based on drive letters.
+- Check destination availability before starting a long migration.
+- Handle intermittent I/O errors clearly.
+- Flush output periodically.
+- Close handles correctly.
+- Avoid using local-drive-only APIs.
+- Preserve resumability after network failures.
+- Clearly identify the failed file/table.
+- Avoid deleting a previously complete export because a later operation failed.
+
+If desired, support:
+
+```text
+--overwrite
+--skip-existing
+--resume
+```
+
+with well-defined behavior.
+
+Default behavior should avoid accidental destructive overwrite.
+
+---
+
+# 46. Configuration File
+
+In addition to CLI arguments and environment variables, support an optional JSON configuration file.
+
+Example:
+
+```json
+{
+  "oracle": {
+    "hostEnv": "ORACLE_MIGRATION_HOST",
+    "portEnv": "ORACLE_MIGRATION_PORT",
+    "userEnv": "ORACLE_MIGRATION_USER",
+    "passwordEnv": "ORACLE_MIGRATION_PASSWORD",
+    "sidEnv": "ORACLE_MIGRATION_SID",
+    "schema": "LEGACY"
+  },
+  "migration": {
+    "output": "\\\\server\\migrations\\legacy",
+    "parallelism": 4,
+    "identifierCase": "lower",
+    "rowCountMode": "exact"
+  }
+}
+```
+
+Precedence should be:
+
+```text
+CLI argument
+    >
+environment variable referenced by configuration/CLI
+    >
+configuration file default
+    >
+application default
+```
+
+Be explicit and test precedence behavior.
+
+---
+
+# 47. Connection Builder
+
+Create an Oracle connection-settings model.
+
+Example:
+
+```csharp
+public sealed record OracleConnectionSettings
+{
+    public required string Username { get; init; }
+    public required string Password { get; init; }
+    public required string Host { get; init; }
+    public required int Port { get; init; }
+
+    public string? Sid { get; init; }
+    public string? ServiceName { get; init; }
+
+    public string? Schema { get; init; }
+}
+```
+
+Validate that exactly one of:
+
+```text
+SID
+ServiceName
+```
+
+is provided unless an explicit full connection descriptor is supported.
+
+Create the provider connection string internally.
+
+Do not make users construct Oracle provider syntax unless they explicitly use a low-level connection-string option.
+
+---
+
+# 48. Environment Variable Resolver
+
+Create an abstraction such as:
+
+```csharp
+public interface IEnvironmentVariableResolver
+{
+    string GetRequired(string variableName);
+    string? GetOptional(string variableName);
+}
+```
+
+Errors should identify the variable name but never print secret values.
+
+Example:
+
+```text
+Environment variable 'ORACLE_MIGRATION_PASSWORD' is not set.
+```
+
+---
+
+# 49. Output Path Abstraction
+
+Create an abstraction for migration output paths.
+
+Example:
+
+```csharp
+public sealed record MigrationOutputPath(string RootPath)
+{
+    public string ManifestPath =>
+        Path.Combine(RootPath, "manifest.csv");
+
+    public string MetadataPath =>
+        Path.Combine(RootPath, "metadata.json");
+
+    public string DataDirectory =>
+        Path.Combine(RootPath, "data");
+
+    public string DdlDirectory =>
+        Path.Combine(RootPath, "ddl");
+}
+```
+
+Use `Path.Combine`.
+
+Do not manually concatenate Windows separators.
+
+Support UNC paths naturally.
+
+---
+
+# 50. Error Handling
+
+Errors must be actionable.
+
+Examples:
+
+```text
+Unable to connect to Oracle host oracle01.internal:1521.
+Oracle error: ORA-12170: TNS connect timeout occurred.
+```
+
+```text
+Schema 'LEGACY' was not found or cannot be read by user 'MIGRATION_READER'.
+```
+
+```text
+Cannot write to output directory:
+\\server\migration\legacy
+
+Access denied.
+```
+
+```text
+Table LEGACY.DOCUMENTS contains unsupported Oracle type:
+SDO_GEOMETRY
+
+Column:
+LOCATION
+
+Provide a custom type mapping or exclude this table.
+```
+
+Do not swallow exceptions.
+
+Do not expose passwords.
+
+---
+
+# 51. Exit Codes
+
+Use deterministic CLI exit codes.
+
+For example:
+
+```text
+0  Success
+1  General failure
+2  Invalid arguments/configuration
+3  Oracle connection failure
+4  Schema access failure
+5  Output/storage failure
+6  Unsupported schema/data encountered
+7  Validation failure
+```
+
+Document them.
+
+---
+
+# 52. Cancellation
+
+Support Ctrl+C gracefully.
+
+Use `CancellationToken`.
+
+On cancellation:
+
+- Stop scheduling new work.
+- Allow active operations to terminate safely.
+- Flush/close files.
+- Preserve `.partial` state.
+- Update migration-state.json where possible.
+- Return a non-zero exit code.
+
+---
+
+# 53. Testing
+
+Write unit tests for:
+
+- Oracle -> PostgreSQL type mappings
+- NUMBER mapping
+- Identifier casing
+- Reserved-word detection
+- Identifier collision detection
+- CSV escaping
+- NULL behavior
+- Date conversion
+- Timestamp conversion
+- Numeric invariant serialization
+- Environment variable precedence
+- SID/service-name validation
+- Path handling
+- UNC path normalization
+- Manifest parsing
+- Manifest validation
+- Metadata serialization
+- DDL output
+- Dependency ordering
+
+Integration tests should be separated from unit tests.
+
+Do not require a real Oracle instance for normal unit-test execution.
+
+Abstract Oracle metadata/data access so it can be mocked/faked.
+
+---
+
+# 54. Performance
+
+Design for schemas containing:
+
+- Hundreds or thousands of tables
+- Tens or hundreds of millions of rows
+- Large CLOB/NCLOB/BLOB columns
+
+Requirements:
+
+- Streaming
+- Bounded concurrency
+- Minimal allocations where practical
+- No whole-table in-memory buffering
+- No assumption that files fit into memory
+- No assumption output is on fast local storage
+
+---
+
+# 55. Security
+
+Requirements:
+
+- Never log passwords.
+- Never serialize passwords.
+- Prefer environment-variable credentials.
+- Avoid command-line password examples in user-facing help where possible because process arguments may be visible.
+- Zero out/limit secret lifetime where reasonably practical.
+- Do not create temporary credential files.
+- Do not send telemetry.
+- Do not upload migration data anywhere.
+- Everything runs locally/on the user's Windows machine.
+
+---
+
+# 56. Future Extensibility
+
+Keep source and target abstractions sufficiently separated that future targets could be added.
+
+Potential future targets:
+
+```text
+Oracle -> PostgreSQL
+Oracle -> CockroachDB
+Oracle -> SQL Server
+Oracle -> SQLite
+```
+
+Do not make Oracle metadata models depend directly on Npgsql types.
+
+Prefer:
+
+```text
+Oracle source metadata
+        |
+        v
+neutral migration model
+        |
+        v
+PostgreSQL mapper/generator
+```
+
+---
+
+# 57. Suggested Domain Model
+
+Potential neutral types:
+
+```csharp
+public sealed record DatabaseSchema(
+    string Name,
+    IReadOnlyList<DatabaseTable> Tables);
+
+public sealed record DatabaseTable(
+    string Name,
+    IReadOnlyList<DatabaseColumn> Columns,
+    PrimaryKeyDefinition? PrimaryKey,
+    IReadOnlyList<ForeignKeyDefinition> ForeignKeys,
+    IReadOnlyList<IndexDefinition> Indexes);
+
+public sealed record DatabaseColumn(
+    string Name,
+    SourceDataType SourceType,
+    bool Nullable,
+    string? DefaultExpression);
+```
+
+Oracle-specific metadata can retain source details where required.
+
+---
+
+# 58. Initial MVP
+
+The first usable milestone should include:
+
+1. Windows-compatible .NET CLI.
+2. Oracle connection using host/port/SID or service name.
+3. Direct CLI values and custom-named environment-variable resolution.
+4. Optional explicit schema selection.
+5. Scan all tables in schema.
+6. Exact row counts.
+7. Generate manifest.csv.
+8. Generate metadata.json.
+9. Generate report.txt.
+10. Generate PostgreSQL CREATE TABLE SQL per table.
+11. Map common Oracle types to PostgreSQL.
+12. Export selected tables to individual CSV files.
+13. Stream large exports.
+14. Support local and UNC output paths.
+15. Preserve NULL vs empty-string distinction.
+16. Clear logging/error handling.
+17. Unit tests for type mapping and manifest parsing.
+
+After the MVP is proven, add:
+
+1. PK/FK generation
+2. Indexes
+3. Sequences
+4. COPY scripts
+5. Parallel exports
+6. Resume support
+7. Validation
+8. Dry-run/reporting enhancements
+9. Trigger/identity analysis
+10. Stronger hash-based verification
+
+---
+
+# 59. Suggested CLI UX
+
+Examples should work naturally in PowerShell.
+
+## Direct connection details
+
+```powershell
+orapg scan `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-sid ORCL `
+    --oracle-user migration_user `
+    --oracle-password-env ORACLE_PASSWORD `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+## Custom environment variables for every field
+
+```powershell
+orapg scan `
+    --oracle-host-env MY_ORA_HOST `
+    --oracle-port-env MY_ORA_PORT `
+    --oracle-sid-env MY_ORA_SID `
+    --oracle-user-env MY_ORA_USER `
+    --oracle-password-env MY_ORA_PASSWORD `
+    --schema-env MY_ORA_SCHEMA `
+    --output \\server\migration\legacy
+```
+
+with:
+
+```powershell
+$env:MY_ORA_HOST="oracle.internal"
+$env:MY_ORA_PORT="1521"
+$env:MY_ORA_SID="ORCL"
+$env:MY_ORA_USER="migration_user"
+$env:MY_ORA_PASSWORD="secret"
+$env:MY_ORA_SCHEMA="LEGACY"
+```
+
+Schema should therefore also support a custom environment variable:
+
+```text
+--schema-env
+```
+
+Priority:
+
+```text
+--schema
+    >
+--schema-env
+    >
+connected Oracle user schema
+```
+
+## Service Name
+
+```powershell
+orapg scan `
+    --oracle-host oracle.internal `
+    --oracle-port 1521 `
+    --oracle-service-name PRODDB `
+    --oracle-user migration_user `
+    --oracle-password-env ORACLE_PASSWORD `
+    --schema LEGACY `
+    --output C:\data_export
+```
+
+## Export
+
+```powershell
+orapg export `
+    --manifest C:\data_export\manifest.csv `
+    --metadata C:\data_export\metadata.json `
+    --oracle-host-env MY_ORA_HOST `
+    --oracle-port-env MY_ORA_PORT `
+    --oracle-sid-env MY_ORA_SID `
+    --oracle-user-env MY_ORA_USER `
+    --oracle-password-env MY_ORA_PASSWORD `
+    --output C:\data_export\data `
+    --parallel 4
+```
+
+---
+
+# 60. Build Philosophy
+
+Implement this incrementally.
+
+Priorities:
+
+1. Correctness
+2. Data integrity
+3. Repeatability
+4. Observability
+5. Performance
+6. Convenience
+
+Never silently convert an Oracle construct when the PostgreSQL equivalent is ambiguous.
+
+Prefer:
+
+```text
+warning/error + explicit override
+```
+
+over:
+
+```text
+guess and generate invalid data/DDL
+```
+
+Every transformation should ideally be deterministic and testable.
+
+---
+
+# 61. Claude Code Instructions
+
+When implementing this project:
+
+- Build the solution in small, compileable slices.
+- Run `dotnet build` after meaningful changes.
+- Run unit tests frequently.
+- Do not leave core migration logic as TODO placeholders.
+- Do not create a giant `Program.cs`.
+- Keep Oracle provider code isolated.
+- Keep PostgreSQL generation isolated.
+- Keep file-system/output handling isolated.
+- Use dependency injection where it improves testability.
+- Use `CancellationToken` for async I/O.
+- Use async database APIs where supported.
+- Stream large data sets.
+- Avoid unnecessary abstractions that provide no current value.
+- Add concise comments where behavior is non-obvious.
+- Keep public types and names clear and predictable.
+- Treat Windows and UNC path behavior as first-class requirements.
+- Ensure secrets never appear in logs.
+- Write tests around every non-trivial type conversion.
+- Do not claim an Oracle feature is migrated if it was only detected/reported.
+- Do not silently skip tables, columns, rows, or unsupported objects.
+
+Before moving beyond the MVP, ensure the MVP can successfully:
+
+```text
+connect
+scan
+write manifest
+write metadata
+generate PostgreSQL table DDL
+export CSV
+```
+
+against a real Oracle schema.
+
+---
+
+# 62. Definition of Done for Initial Application
+
+The initial application is considered usable when the following workflow succeeds from Windows:
+
+```powershell
+$env:MY_ORA_HOST="oracle.internal"
+$env:MY_ORA_PORT="1521"
+$env:MY_ORA_SID="ORCL"
+$env:MY_ORA_USER="migration_user"
+$env:MY_ORA_PASSWORD="secret"
+
+orapg scan `
+    --oracle-host-env MY_ORA_HOST `
+    --oracle-port-env MY_ORA_PORT `
+    --oracle-sid-env MY_ORA_SID `
+    --oracle-user-env MY_ORA_USER `
+    --oracle-password-env MY_ORA_PASSWORD `
+    --schema LEGACY `
+    --output \\server\migration\legacy
+```
+
+and produces:
+
+```text
+\\server\migration\legacy\
+├── manifest.csv
+├── metadata.json
+└── report.txt
+```
+
+The user may then edit `manifest.csv`.
+
+This must then succeed:
+
+```powershell
+orapg ddl `
+    --manifest \\server\migration\legacy\manifest.csv `
+    --metadata \\server\migration\legacy\metadata.json `
+    --output \\server\migration\legacy\ddl
+```
+
+and generate a PostgreSQL SQL file for each selected table.
+
+Finally:
+
+```powershell
+orapg export `
+    --manifest \\server\migration\legacy\manifest.csv `
+    --metadata \\server\migration\legacy\metadata.json `
+    --oracle-host-env MY_ORA_HOST `
+    --oracle-port-env MY_ORA_PORT `
+    --oracle-sid-env MY_ORA_SID `
+    --oracle-user-env MY_ORA_USER `
+    --oracle-password-env MY_ORA_PASSWORD `
+    --output \\server\migration\legacy\data
+```
+
+must generate one CSV per selected table, with Oracle values converted/serialized appropriately for subsequent PostgreSQL import.
+
+The same workflow must also work when output is:
+
+```text
+C:\data_export
+```
+
+instead of a network share.
+
+No passwords should appear in any generated file or log.
