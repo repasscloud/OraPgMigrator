@@ -38,7 +38,11 @@ public sealed class OracleTableDataReader : ISourceTableDataReader
         await using var command = connection.CreateCommand();
         command.CommandText = $"SELECT {columnList} FROM \"{owner}\".\"{tableName}\"";
         command.CommandTimeout = 0;
-        command.FetchSize = 512 * 1024;
+
+        // Do not set OracleCommand.FetchSize: ODP.NET's setter throws
+        // NullReferenceException unconditionally when this project is published
+        // Native AOT (its trim-unsafe internals), failing every export. The
+        // provider's default fetch buffer (64KB) is used instead.
 
         await using var reader = await command.ExecuteReaderAsync(CommandBehavior.SequentialAccess, cancellationToken);
 
