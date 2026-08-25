@@ -560,14 +560,36 @@ public sealed class OracleSchemaReader : ISourceSchemaReader
         {
             result.Add(new SequenceDefinition(
                 reader.GetString(0),
-                System.Convert.ToInt64(reader.GetValue(1)),
-                System.Convert.ToInt64(reader.GetValue(2)),
-                reader.IsDBNull(3) ? null : System.Convert.ToInt64(reader.GetValue(3)),
-                reader.IsDBNull(4) ? null : System.Convert.ToInt64(reader.GetValue(4)),
+                ToClampedInt64(reader.GetValue(1)),
+                ToClampedInt64(reader.GetValue(2)),
+                reader.IsDBNull(3) ? null : ToClampedInt64(reader.GetValue(3)),
+                reader.IsDBNull(4) ? null : ToClampedInt64(reader.GetValue(4)),
                 reader.GetString(5) == "Y",
-                reader.IsDBNull(6) ? 0 : System.Convert.ToInt64(reader.GetValue(6))));
+                reader.IsDBNull(6) ? 0 : ToClampedInt64(reader.GetValue(6))));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Oracle sequence bounds default to 28-digit NUMBER values (e.g. MAX_VALUE of
+    /// 9999999999999999999999999999) that exceed Int64.MaxValue/MinValue, so a
+    /// plain Convert.ToInt64 throws OverflowException. Clamp to the Int64 range
+    /// instead, matching Postgres's own bigint bounds for the generated DDL.
+    /// </summary>
+    internal static long ToClampedInt64(object value)
+    {
+        var d = System.Convert.ToDecimal(value);
+        if (d >= long.MaxValue)
+        {
+            return long.MaxValue;
+        }
+
+        if (d <= long.MinValue)
+        {
+            return long.MinValue;
+        }
+
+        return (long)d;
     }
 
     private static async Task<List<ViewDefinition>> ReadViewsAsync(
