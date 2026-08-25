@@ -21,19 +21,21 @@
     <RootNamespace>OraPgMigrator.Cli</RootNamespace>
     <RuntimeIdentifiers>win-x64;osx-x64;osx-arm64;linux-x64</RuntimeIdentifiers>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <!--
     Publish as a single self-contained file with no side-by-side dependencies.
     Only applies when publishing for a specific RuntimeIdentifier; plain
-    `dotnet build`/`dotnet test` (no RID) are unaffected.
+    `dotnet build`/`dotnet test` (no RID) are unaffected. DebugType is
+    scoped here too, so normal dev/test builds keep their PDBs for
+    source-level debugging.
   -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <!--
@@ -41,9 +43,13 @@
     embedded IL/CLR to self-extract), which is smaller and starts faster
     than the single-file-with-CLR publish above. PublishSingleFile is
     ignored by the AOT toolchain, so no conflict with the group above.
+    StripSymbols disables generation of the separate native debug symbol
+    file (orapg.pdb on Windows) that the AOT toolchain emits independently
+    of DebugType.
   -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
     <PublishAot>true</PublishAot>
+    <StripSymbols>true</StripSymbols>
     <!--
       Oracle.ManagedDataAccess and CsvHelper are not trim/AOT-annotated
       libraries; their reflection-based paths (not used by this CLI's
