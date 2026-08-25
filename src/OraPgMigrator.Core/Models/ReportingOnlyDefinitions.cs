@@ -1,3 +1,6 @@
+using System.Text.Json.Serialization;
+using OraPgMigrator.Core.Json;
+
 namespace OraPgMigrator.Core.Models;
 
 /// <summary>
@@ -10,6 +13,7 @@ public sealed record TriggerDefinition(string Name, string TableName, string Bod
 
 public sealed record SynonymDefinition(string Name, string TargetOwner, string TargetObject);
 
+[JsonConverter(typeof(CamelCaseStringEnumConverter<RoutineKind>))]
 public enum RoutineKind
 {
     Procedure,

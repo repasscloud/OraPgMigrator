@@ -1,5 +1,9 @@
+using System.Text.Json.Serialization;
+using OraPgMigrator.Core.Json;
+
 namespace OraPgMigrator.Core.Models;
 
+[JsonConverter(typeof(CamelCaseStringEnumConverter<DefaultKind>))]
 public enum DefaultKind
 {
     None,
