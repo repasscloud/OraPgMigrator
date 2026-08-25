@@ -1,13 +1,12 @@
 using System.Text.Json;
 using OraPgMigrator.Core.Migration;
 using OraPgMigrator.Infrastructure.FileSystem;
+using OraPgMigrator.Infrastructure.Json;
 
 namespace OraPgMigrator.Infrastructure.State;
 
 public static class MigrationStateIo
 {
-    private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
-
     public static async Task<MigrationState> ReadOrEmptyAsync(string path, CancellationToken cancellationToken)
     {
         if (!File.Exists(path))
@@ -16,7 +15,7 @@ public static class MigrationStateIo
         }
 
         await using var stream = File.OpenRead(path);
-        var state = await JsonSerializer.DeserializeAsync<MigrationState>(stream, Options, cancellationToken);
+        var state = await JsonSerializer.DeserializeAsync(stream, MigrationStateJsonContext.Default.MigrationState, cancellationToken);
         return state ?? new MigrationState();
     }
 
@@ -24,7 +23,7 @@ public static class MigrationStateIo
     {
         await AtomicFile.WriteAsync(path, async (stream, ct) =>
         {
-            await JsonSerializer.SerializeAsync(stream, state, Options, ct);
+            await JsonSerializer.SerializeAsync(stream, state, MigrationStateJsonContext.Default.MigrationState, ct);
         }, cancellationToken);
     }
 }

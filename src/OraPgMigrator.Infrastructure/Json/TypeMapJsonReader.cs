@@ -7,7 +7,7 @@ namespace OraPgMigrator.Infrastructure.Json;
 /// <summary>Reads a --type-map JSON file of the form <c>{ "typeMappings": { "XMLTYPE": "xml" } }</c>.</summary>
 public static class TypeMapJsonReader
 {
-    private sealed class TypeMapDocument
+    internal sealed class TypeMapDocument
     {
         [JsonPropertyName("typeMappings")]
         public Dictionary<string, string> TypeMappings { get; set; } = new();
@@ -16,7 +16,7 @@ public static class TypeMapJsonReader
     public static async Task<TypeMappingOverrides> ReadAsync(string path, CancellationToken cancellationToken)
     {
         await using var stream = File.OpenRead(path);
-        var doc = await JsonSerializer.DeserializeAsync<TypeMapDocument>(stream, cancellationToken: cancellationToken);
+        var doc = await JsonSerializer.DeserializeAsync(stream, AppJsonContext.Default.TypeMapDocument, cancellationToken);
         return new TypeMappingOverrides(doc?.TypeMappings);
     }
 }
