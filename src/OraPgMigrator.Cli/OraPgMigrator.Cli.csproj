@@ -39,34 +39,10 @@
   </PropertyGroup>
 
   <!--
-    Native AOT for win-x64: compiles straight to a native orapg.exe (no
-    embedded IL/CLR to self-extract), which is smaller and starts faster
-    than the single-file-with-CLR publish above. PublishSingleFile is
-    ignored by the AOT toolchain, so no conflict with the group above.
-    StripSymbols disables generation of the separate native debug symbol
-    file (orapg.pdb on Windows) that the AOT toolchain emits independently
-    of DebugType.
-  -->
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
-    <PublishAot>true</PublishAot>
-    <StripSymbols>true</StripSymbols>
-    <!--
-      Oracle.ManagedDataAccess and CsvHelper are not trim/AOT-annotated
-      libraries; their reflection-based paths (not used by this CLI's
-      supported code paths) surface as IL2104/IL3053 trim-analysis warnings
-      and IL3000 warnings from Assembly.Location usage in single-file apps.
-      These are known, expected, and non-actionable from our side, so they
-      are suppressed rather than silencing trim warnings project-wide.
-    -->
-    <NoWarn>$(NoWarn);IL2104;IL3053;IL3000</NoWarn>
-  </PropertyGroup>
-
-  <!--
-    Belt-and-suspenders: the AOT toolchain still writes a native orapg.pdb
-    despite StripSymbols/DebugType, and referenced projects (Core,
-    Infrastructure, Oracle, Postgres) don't inherit this project's
-    DebugType, so their PDBs land in the publish output too. Delete every
-    .pdb from the publish directory after publish completes so none ship.
+    Belt-and-suspenders: referenced projects (Core, Infrastructure, Oracle,
+    Postgres) don't inherit this project's DebugType, so their PDBs land in
+    the publish output despite it. Delete every .pdb from the publish
+    directory after publish completes so none ship.
   -->
   <Target Name="RemovePublishPdbs" AfterTargets="Publish">
     <ItemGroup>
