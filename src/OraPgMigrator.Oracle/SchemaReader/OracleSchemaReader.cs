@@ -558,23 +558,24 @@ public sealed class OracleSchemaReader : ISourceSchemaReader
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
+            var sequenceName = reader.GetString(0);
             result.Add(new SequenceDefinition(
-                reader.GetString(0),
-                ToClampedInt64(reader.GetValue(1)),
-                ToClampedInt64(reader.GetValue(2)),
+                sequenceName,
+                ToExactInt64(reader.GetValue(1), sequenceName, "LAST_NUMBER"),
+                ToExactInt64(reader.GetValue(2), sequenceName, "INCREMENT_BY"),
                 reader.IsDBNull(3) ? null : ToClampedInt64(reader.GetValue(3)),
                 reader.IsDBNull(4) ? null : ToClampedInt64(reader.GetValue(4)),
                 reader.GetString(5) == "Y",
-                reader.IsDBNull(6) ? 0 : ToClampedInt64(reader.GetValue(6))));
+                reader.IsDBNull(6) ? 0 : ToExactInt64(reader.GetValue(6), sequenceName, "CACHE_SIZE")));
         }
         return result;
     }
 
     /// <summary>
-    /// Oracle sequence bounds default to 28-digit NUMBER values (e.g. MAX_VALUE of
-    /// 9999999999999999999999999999) that exceed Int64.MaxValue/MinValue, so a
-    /// plain Convert.ToInt64 throws OverflowException. Clamp to the Int64 range
-    /// instead, matching Postgres's own bigint bounds for the generated DDL.
+    /// Oracle sequence MIN_VALUE/MAX_VALUE default to 28-digit NUMBER bounds (e.g.
+    /// MAX_VALUE of 9999999999999999999999999999) that exceed Int64's range. These
+    /// are compatibility bounds rather than operational values, and Postgres's own
+    /// bigint sequences are bounded by Int64 anyway, so it's safe to clamp them.
     /// </summary>
     internal static long ToClampedInt64(object value)
     {
@@ -587,6 +588,27 @@ public sealed class OracleSchemaReader : ISourceSchemaReader
         if (d <= long.MinValue)
         {
             return long.MinValue;
+        }
+
+        return (long)d;
+    }
+
+    /// <summary>
+    /// LAST_NUMBER, INCREMENT_BY and CACHE_SIZE are operational values that
+    /// determine the actual identifiers a migrated sequence will generate.
+    /// Silently clamping one of these (unlike MIN_VALUE/MAX_VALUE, which are just
+    /// compatibility bounds) would produce DDL that looks valid but generates a
+    /// different stream of numbers than the source, so an out-of-range value must
+    /// fail the scan instead.
+    /// </summary>
+    internal static long ToExactInt64(object value, string sequenceName, string fieldName)
+    {
+        var d = System.Convert.ToDecimal(value);
+        if (d > long.MaxValue || d < long.MinValue)
+        {
+            throw new NotSupportedException(
+                $"Sequence '{sequenceName}' has {fieldName} = {d}, which is outside the range PostgreSQL bigint sequences support ({long.MinValue}..{long.MaxValue}). " +
+                "This sequence cannot be migrated automatically; exclude it or adjust it in Oracle before scanning.");
         }
 
         return (long)d;
