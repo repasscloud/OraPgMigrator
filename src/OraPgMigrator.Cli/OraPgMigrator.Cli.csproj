@@ -21,6 +21,7 @@
     <RootNamespace>OraPgMigrator.Cli</RootNamespace>
     <RuntimeIdentifiers>win-x64;osx-x64;osx-arm64;linux-x64</RuntimeIdentifiers>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <DebugType>none</DebugType>
   </PropertyGroup>
 
   <!--
@@ -43,6 +44,15 @@
   -->
   <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
     <PublishAot>true</PublishAot>
+    <!--
+      Oracle.ManagedDataAccess and CsvHelper are not trim/AOT-annotated
+      libraries; their reflection-based paths (not used by this CLI's
+      supported code paths) surface as IL2104/IL3053 trim-analysis warnings
+      and IL3000 warnings from Assembly.Location usage in single-file apps.
+      These are known, expected, and non-actionable from our side, so they
+      are suppressed rather than silencing trim warnings project-wide.
+    -->
+    <NoWarn>$(NoWarn);IL2104;IL3053;IL3000</NoWarn>
   </PropertyGroup>
 
 </Project>
