@@ -61,4 +61,18 @@
     <NoWarn>$(NoWarn);IL2104;IL3053;IL3000</NoWarn>
   </PropertyGroup>
 
+  <!--
+    Belt-and-suspenders: the AOT toolchain still writes a native orapg.pdb
+    despite StripSymbols/DebugType, and referenced projects (Core,
+    Infrastructure, Oracle, Postgres) don't inherit this project's
+    DebugType, so their PDBs land in the publish output too. Delete every
+    .pdb from the publish directory after publish completes so none ship.
+  -->
+  <Target Name="RemovePublishPdbs" AfterTargets="Publish">
+    <ItemGroup>
+      <PublishPdbFiles Include="$(PublishDir)*.pdb" />
+    </ItemGroup>
+    <Delete Files="@(PublishPdbFiles)" Condition="'@(PublishPdbFiles)' != ''" />
+  </Target>
+
 </Project>
