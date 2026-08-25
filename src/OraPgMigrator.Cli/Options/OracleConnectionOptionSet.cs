@@ -50,16 +50,22 @@ public sealed class OracleConnectionOptionSet
         command.Options.Add(SchemaEnv);
     }
 
+    public const string DefaultHostEnvVar = "ORAPG_HOST";
+    public const string DefaultPortEnvVar = "ORAPG_PORT";
+    public const string DefaultSidEnvVar = "ORAPG_SID";
+    public const string DefaultUserEnvVar = "ORAPG_USER";
+    public const string DefaultPasswordEnvVar = "ORAPG_PASSWORD";
+
     public OracleConnectionSettings Resolve(ParseResult parseResult, IEnvironmentVariableResolver envResolver)
     {
-        var host = Require("Oracle host", parseResult.GetValue(Host), parseResult.GetValue(HostEnv), envResolver);
-        var user = Require("Oracle username", parseResult.GetValue(User), parseResult.GetValue(UserEnv), envResolver);
-        var password = Require("Oracle password", parseResult.GetValue(Password), parseResult.GetValue(PasswordEnv), envResolver);
+        var host = Require("Oracle host", parseResult.GetValue(Host), parseResult.GetValue(HostEnv), DefaultHostEnvVar, envResolver);
+        var user = Require("Oracle username", parseResult.GetValue(User), parseResult.GetValue(UserEnv), DefaultUserEnvVar, envResolver);
+        var password = Require("Oracle password", parseResult.GetValue(Password), parseResult.GetValue(PasswordEnv), DefaultPasswordEnvVar, envResolver);
 
-        var portText = Optional(parseResult.GetValue(Port)?.ToString(), parseResult.GetValue(PortEnv), envResolver);
+        var portText = OptionalWithFallback(parseResult.GetValue(Port)?.ToString(), parseResult.GetValue(PortEnv), DefaultPortEnvVar, envResolver);
         var port = portText is null ? 1521 : int.Parse(portText);
 
-        var sid = Optional(parseResult.GetValue(Sid), parseResult.GetValue(SidEnv), envResolver);
+        var sid = OptionalWithFallback(parseResult.GetValue(Sid), parseResult.GetValue(SidEnv), DefaultSidEnvVar, envResolver);
         var serviceName = Optional(parseResult.GetValue(ServiceName), parseResult.GetValue(ServiceNameEnv), envResolver);
         var schema = Optional(parseResult.GetValue(Schema), parseResult.GetValue(SchemaEnv), envResolver);
 
@@ -75,10 +81,49 @@ public sealed class OracleConnectionOptionSet
         };
     }
 
-    private static string Require(string label, string? direct, string? envVarName, IEnvironmentVariableResolver envResolver)
+    /// <summary>
+    /// Resolves a value that is always backed by an environment variable: the direct
+    /// flag wins if set, otherwise the explicit "*-env" flag names the variable to read,
+    /// otherwise the field's default "ORAPG_*" variable name is used. The env var named
+    /// by whichever path is taken must actually be set, or resolution fails naming it.
+    /// </summary>
+    private static string Require(string label, string? direct, string? explicitEnvVarName, string defaultEnvVarName, IEnvironmentVariableResolver envResolver)
     {
-        return Optional(direct, envVarName, envResolver)
-            ?? throw new InvalidOperationException($"{label} was not provided. Supply the direct option or its *-env equivalent.");
+        if (!string.IsNullOrEmpty(direct))
+        {
+            return direct;
+        }
+
+        var envVarName = string.IsNullOrEmpty(explicitEnvVarName) ? defaultEnvVarName : explicitEnvVarName;
+        try
+        {
+            return envResolver.GetRequired(envVarName);
+        }
+        catch (InvalidOperationException) when (string.IsNullOrEmpty(explicitEnvVarName))
+        {
+            throw new InvalidOperationException(
+                $"{label} was not provided. Set the environment variable '{defaultEnvVarName}', or pass its direct or *-env option explicitly.");
+        }
+    }
+
+    /// <summary>
+    /// Like <see cref="Require"/> but the default env var lookup is optional: used for
+    /// fields that are mutually exclusive with an alternative (Sid vs ServiceName), so an
+    /// unset default must fall through silently rather than error.
+    /// </summary>
+    private static string? OptionalWithFallback(string? direct, string? explicitEnvVarName, string defaultEnvVarName, IEnvironmentVariableResolver envResolver)
+    {
+        if (!string.IsNullOrEmpty(direct))
+        {
+            return direct;
+        }
+
+        if (!string.IsNullOrEmpty(explicitEnvVarName))
+        {
+            return envResolver.GetRequired(explicitEnvVarName);
+        }
+
+        return envResolver.GetOptional(defaultEnvVarName);
     }
 
     private static string? Optional(string? direct, string? envVarName, IEnvironmentVariableResolver envResolver)
