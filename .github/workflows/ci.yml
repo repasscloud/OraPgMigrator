@@ -49,8 +49,11 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Restore
+        run: dotnet restore src/OraPgMigrator.Cli/OraPgMigrator.Cli.csproj --locked-mode
+
       - name: Publish win-x64 (Native AOT, single file)
-        run: dotnet publish src/OraPgMigrator.Cli/OraPgMigrator.Cli.csproj -c Release -r win-x64 --locked-mode -o publish/win-x64
+        run: dotnet publish src/OraPgMigrator.Cli/OraPgMigrator.Cli.csproj -c Release -r win-x64 --no-restore -o publish/win-x64
 
       - name: Upload orapg.exe
         uses: actions/upload-artifact@v4
