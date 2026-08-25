@@ -62,20 +62,43 @@ single-file host rather than Native AOT.
 
 ## Usage
 
+Every Oracle connection value (host, port, SID, user, password) is always read
+from an environment variable — the CLI never accepts these as bare command-line
+strings. By default it reads a fixed set of variable names, so if you just set
+those, no `--oracle-*-env` flags are needed at all:
+
+| Setting  | Default variable | Direct flag       | Custom-name flag         |
+|----------|-------------------|--------------------|---------------------------|
+| Host     | `ORAPG_HOST`      | `--oracle-host`    | `--oracle-host-env`      |
+| Port     | `ORAPG_PORT`      | `--oracle-port`    | `--oracle-port-env`      |
+| SID      | `ORAPG_SID`       | `--oracle-sid`     | `--oracle-sid-env`       |
+| User     | `ORAPG_USER`      | `--oracle-user`    | `--oracle-user-env`      |
+| Password | `ORAPG_PASSWORD`  | `--oracle-password`| `--oracle-password-env`  |
+
+Precedence per setting: the direct flag (e.g. `--oracle-host`) wins if given;
+otherwise the `*-env` flag names an environment variable to read; otherwise the
+default variable name above is read. If none of those resolve to a set,
+non-empty value, the command fails immediately, naming exactly which variable
+is missing. Port falls back to `1521` if left fully unset (no flag, no
+`ORAPG_PORT`). SID falls back to nothing if unset, since it's mutually
+exclusive with `--oracle-service-name` — supply exactly one of the two.
+
+`--schema`, `--output`, `--manifest`, and `--metadata` are plain strings with no
+`-env` equivalent and no defaults; the app never assumes them. Populate them
+from an environment variable directly in the shell if you want, e.g.
+`--output $env:DDL_EXPORT_PATH` — PowerShell substitutes the value before orapg
+ever sees it.
+
 ```powershell
-$env:MY_ORA_HOST="oracle.internal"
-$env:MY_ORA_PORT="1521"
-$env:MY_ORA_SID="ORCL"
-$env:MY_ORA_USER="migration_user"
-$env:MY_ORA_PASSWORD="secret"
+# Simplest form: rely on the default ORAPG_* variable names
+$env:ORAPG_HOST="oracle.internal"
+$env:ORAPG_PORT="1521"
+$env:ORAPG_SID="ORCL"
+$env:ORAPG_USER="migration_user"
+$env:ORAPG_PASSWORD="secret"
 
 # 1. Scan a schema
 orapg scan `
-    --oracle-host-env MY_ORA_HOST `
-    --oracle-port-env MY_ORA_PORT `
-    --oracle-sid-env MY_ORA_SID `
-    --oracle-user-env MY_ORA_USER `
-    --oracle-password-env MY_ORA_PASSWORD `
     --schema LEGACY `
     --output C:\data_export
 
@@ -89,15 +112,31 @@ orapg ddl `
 orapg export `
     --manifest C:\data_export\manifest.csv `
     --metadata C:\data_export\metadata.json `
+    --output C:\data_export\data
+
+# Or run scan -> ddl -> export in one step:
+orapg migrate --output C:\data_export
+```
+
+If your variables use different names, point at them explicitly with the
+`*-env` flags — the value passed must be the *name* of a set environment
+variable, never a literal value:
+
+```powershell
+$env:MY_ORA_HOST="oracle.internal"
+$env:MY_ORA_PORT="1521"
+$env:MY_ORA_SID="ORCL"
+$env:MY_ORA_USER="migration_user"
+$env:MY_ORA_PASSWORD="secret"
+
+orapg scan `
     --oracle-host-env MY_ORA_HOST `
     --oracle-port-env MY_ORA_PORT `
     --oracle-sid-env MY_ORA_SID `
     --oracle-user-env MY_ORA_USER `
     --oracle-password-env MY_ORA_PASSWORD `
-    --output C:\data_export\data
-
-# Or run scan -> ddl -> export in one step:
-orapg migrate --oracle-host-env MY_ORA_HOST ... --output C:\data_export
+    --schema LEGACY `
+    --output C:\data_export
 ```
 
 Run `orapg <command> --help` for the full option list. Exit codes are documented
