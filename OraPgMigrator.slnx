@@ -1,0 +1,15 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/OraPgMigrator.Cli/OraPgMigrator.Cli.csproj" />
+    <Project Path="src/OraPgMigrator.Core/OraPgMigrator.Core.csproj" />
+    <Project Path="src/OraPgMigrator.Infrastructure/OraPgMigrator.Infrastructure.csproj" />
+    <Project Path="src/OraPgMigrator.Oracle/OraPgMigrator.Oracle.csproj" />
+    <Project Path="src/OraPgMigrator.Postgres/OraPgMigrator.Postgres.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OraPgMigrator.Core.Tests/OraPgMigrator.Core.Tests.csproj" />
+    <Project Path="tests/OraPgMigrator.IntegrationTests/OraPgMigrator.IntegrationTests.csproj" />
+    <Project Path="tests/OraPgMigrator.Oracle.Tests/OraPgMigrator.Oracle.Tests.csproj" />
+    <Project Path="tests/OraPgMigrator.Postgres.Tests/OraPgMigrator.Postgres.Tests.csproj" />
+  </Folder>
+</Solution>

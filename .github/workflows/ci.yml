@@ -1,0 +1,53 @@
+name: CI
+
+# Only runs for pull requests targeting main — never for direct pushes/commits
+# to main itself (there is no `push` trigger here).
+on:
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs when new commits land on the same PR.
+concurrency:
+  group: ci-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  build-and-test:
+    name: Build & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Restore
+        run: dotnet restore OraPgMigrator.slnx
+
+      - name: Build
+        run: dotnet build OraPgMigrator.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test OraPgMigrator.slnx --configuration Release --no-build --verbosity normal
+
+  auto-merge:
+    name: Enable auto-merge
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    # Skip draft PRs — they shouldn't be merged automatically.
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Enable auto-merge for this PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr merge --auto --squash \
+            "${{ github.event.pull_request.number }}" \
+            --repo "${{ github.repository }}"
