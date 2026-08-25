@@ -29,7 +29,7 @@ jobs:
           dotnet-version: '10.0.x'
 
       - name: Restore
-        run: dotnet restore OraPgMigrator.slnx
+        run: dotnet restore OraPgMigrator.slnx --locked-mode
 
       - name: Build
         run: dotnet build OraPgMigrator.slnx --configuration Release --no-restore
@@ -37,9 +37,31 @@ jobs:
       - name: Test
         run: dotnet test OraPgMigrator.slnx --configuration Release --no-build --verbosity normal
 
+  publish-windows:
+    name: Publish Windows binary
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Publish win-x64 (Native AOT, single file)
+        run: dotnet publish src/OraPgMigrator.Cli/OraPgMigrator.Cli.csproj -c Release -r win-x64 --locked-mode -o publish/win-x64
+
+      - name: Upload orapg.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: orapg-win-x64
+          path: publish/win-x64/orapg.exe
+          if-no-files-found: error
+
   auto-merge:
     name: Enable auto-merge
-    needs: build-and-test
+    needs: [build-and-test, publish-windows]
     runs-on: ubuntu-latest
     # Skip draft PRs — they shouldn't be merged automatically.
     if: github.event.pull_request.draft == false

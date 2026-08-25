@@ -14,13 +14,35 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <AssemblyName>orapg</AssemblyName>
     <RootNamespace>OraPgMigrator.Cli</RootNamespace>
     <RuntimeIdentifiers>win-x64;osx-x64;osx-arm64;linux-x64</RuntimeIdentifiers>
     <InvariantGlobalization>true</InvariantGlobalization>
+  </PropertyGroup>
+
+  <!--
+    Publish as a single self-contained file with no side-by-side dependencies.
+    Only applies when publishing for a specific RuntimeIdentifier; plain
+    `dotnet build`/`dotnet test` (no RID) are unaffected.
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+  </PropertyGroup>
+
+  <!--
+    Native AOT for win-x64: compiles straight to a native orapg.exe (no
+    embedded IL/CLR to self-extract), which is smaller and starts faster
+    than the single-file-with-CLR publish above. PublishSingleFile is
+    ignored by the AOT toolchain, so no conflict with the group above.
+  -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' == 'win-x64'">
+    <PublishAot>true</PublishAot>
   </PropertyGroup>
 
 </Project>
