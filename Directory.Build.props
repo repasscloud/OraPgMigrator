@@ -1,0 +1,12 @@
+<Project>
+  <PropertyGroup>
+    <!--
+      Dev/CI hosts here only have the .NET 10 shared runtime installed, not net9.0.
+      RollForward=LatestMajor lets framework-dependent net9.0 builds execute on that
+      runtime for local build/test verification, without changing the project's
+      declared TargetFramework (net9.0, per the build requirements). This has no
+      effect on a self-contained Windows publish of the CLI.
+    -->
+    <RollForward>LatestMajor</RollForward>
+  </PropertyGroup>
+</Project>
