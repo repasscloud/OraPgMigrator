@@ -68,6 +68,7 @@ jobs:
           name: orapg-win-x64
           path: publish/win-x64/orapg.exe
           if-no-files-found: error
+          retention-days: 1
 
   auto-merge:
     name: Enable auto-merge
