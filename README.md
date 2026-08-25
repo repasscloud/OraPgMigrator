@@ -27,18 +27,38 @@ tests/
 
 ## Build & test
 
+Requires the .NET 10 SDK (all projects target `net10.0`).
+
 ```bash
+dotnet restore OraPgMigrator.slnx
 dotnet build OraPgMigrator.slnx
 dotnet test OraPgMigrator.slnx
 ```
 
+Restores use committed `packages.lock.json` files per project for
+reproducible builds. After changing a `PackageReference`, run
+`dotnet restore` to refresh the lock file and commit it alongside the
+`.csproj` change; CI restores with `--locked-mode` and fails if a lock
+file is out of date.
+
 ## Publish the Windows executable
 
 ```powershell
-dotnet publish src\OraPgMigrator.Cli -c Release -r win-x64 --self-contained false -o .\publish
+dotnet publish src\OraPgMigrator.Cli -c Release -r win-x64 -o .\publish
 ```
 
-produces `.\publish\orapg.exe`.
+produces a single native `.\publish\orapg.exe` — self-contained, Native
+AOT-compiled, and requiring no separate runtime files or `.dll`s
+alongside it. CI publishes this on every PR (`publish-windows` job in
+[ci.yml](.github/workflows/ci.yml)) and uploads it as the `orapg-win-x64`
+artifact.
+
+Native AOT is win-x64-only for now (set via a `RuntimeIdentifier`-gated
+`PublishAot` in
+[OraPgMigrator.Cli.csproj](src/OraPgMigrator.Cli/OraPgMigrator.Cli.csproj)).
+Publishing for `osx-x64`, `osx-arm64`, or `linux-x64` still produces a
+single self-contained file, just via the trimmed self-extracting
+single-file host rather than Native AOT.
 
 ## Usage
 
